@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>词归一化</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", sans-serif;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 24px 16px;
+    color: #222;
+    line-height: 1.5;
+    background: #fafafa;
+  }
+  h1 { font-size: 1.5rem; margin: 0 0 16px; }
+  .card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .field { margin-bottom: 12px; }
+  .field label {
+    display: block;
+    font-size: 0.9rem;
+    color: #555;
+    margin-bottom: 4px;
+  }
+  input[type="file"], select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 1rem;
+    background: #fff;
+  }
+  button {
+    background: #2563eb;
+    color: #fff;
+    border: 0;
+    border-radius: 4px;
+    padding: 10px 20px;
+    font-size: 1rem;
+    cursor: pointer;
+  }
+  button:disabled { background: #94a3b8; cursor: not-allowed; }
+  button:hover:not(:disabled) { background: #1d4ed8; }
+  .panel { display: none; }
+  .panel.visible { display: block; }
+  .error { color: #b91c1c; }
+  .error h2 { color: #b91c1c; font-size: 1.1rem; margin: 0 0 8px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+    font-size: 0.95rem;
+  }
+  th, td {
+    border: 1px solid #e0e0e0;
+    padding: 6px 10px;
+    text-align: left;
+  }
+  th { background: #f1f5f9; font-weight: 600; }
+  td.count { text-align: right; font-variant-numeric: tabular-nums; }
+  a.download-link {
+    display: inline-block;
+    margin-top: 12px;
+    color: #2563eb;
+    text-decoration: none;
+    font-weight: 500;
+  }
+  a.download-link:hover { text-decoration: underline; }
+  .summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 8px 0 4px;
+  }
+  .summary-row strong { font-size: 1.1rem; }
+  .hint { font-size: 0.85rem; color: #666; margin-top: 12px; }
+  @media (max-width: 480px) {
+    body { padding: 16px 12px; }
+    .card { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+  <h1>词归一化</h1>
+
+  <div class="card">
+    <form id="upload-form">
+      <div class="field">
+        <label for="file-input">选择 xlsx 文件</label>
+        <input type="file" id="file-input" accept=".xlsx" required>
+      </div>
+      <div class="field">
+        <label for="model-select">模型</label>
+        <select id="model-select">
+          <option value="bge" selected>bge</option>
+          <option value="fasttext">fasttext</option>
+        </select>
+      </div>
+      <button type="submit" id="submit-btn">开始处理</button>
+      <p class="hint">列 0 = 原词，列 1 = 极性提示（可选，正面 / 负面），不填表头</p>
+    </form>
+  </div>
+
+  <div class="card panel" id="results-panel">
+    <h2>处理完成</h2>
+    <div class="summary-row">
+      <span>总行数</span>
+      <strong id="total-count">-</strong>
+    </div>
+    <table>
+      <thead>
+        <tr><th>层级</th><th style="text-align:right">数量</th></tr>
+      </thead>
+      <tbody id="layer-tbody">
+      </tbody>
+    </table>
+    <a class="download-link" id="download-link" href="#" download="normalized.xlsx">下载结果</a>
+  </div>
+
+  <div class="card panel error" id="error-panel">
+    <h2>处理失败</h2>
+    <p id="error-message">-</p>
+  </div>
+
+<script>
+(function () {
+  var form = document.getElementById('upload-form');
+  var fileInput = document.getElementById('file-input');
+  var modelSelect = document.getElementById('model-select');
+  var submitBtn = document.getElementById('submit-btn');
+  var resultsPanel = document.getElementById('results-panel');
+  var errorPanel = document.getElementById('error-panel');
+  var totalCount = document.getElementById('total-count');
+  var layerTbody = document.getElementById('layer-tbody');
+  var downloadLink = document.getElementById('download-link');
+  var errorMessage = document.getElementById('error-message');
+
+  function hide(panel) { panel.classList.remove('visible'); }
+  function show(panel) { panel.classList.add('visible'); }
+
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    var file = fileInput.files[0];
+    if (!file) return;
+
+    hide(resultsPanel);
+    hide(errorPanel);
+    submitBtn.disabled = true;
+    submitBtn.textContent = '处理中...';
+
+    var formData = new FormData();
+    formData.append('file', file);
+    var model = modelSelect.value;
+    var url = '/api/v1/normalize/excel?model=' + encodeURIComponent(model);
+
+    fetch(url, { method: 'POST', body: formData })
+      .then(function (response) {
+        var summaryHeader = response.headers.get('X-Summary');
+        if (!response.ok) {
+          return response.json().catch(function () { return {}; }).then(function (body) {
+            var msg = (body && body.error) ? body.error : ('HTTP ' + response.status);
+            throw new Error(msg + ' (HTTP ' + response.status + ')');
+          });
+        }
+        return response.blob().then(function (blob) {
+          return { blob: blob, summary: summaryHeader };
+        });
+      })
+      .then(function (result) {
+        var blob = result.blob;
+        var blobUrl = URL.createObjectURL(blob);
+        // Auto-trigger download
+        var tmp = document.createElement('a');
+        tmp.href = blobUrl;
+        tmp.download = 'normalized.xlsx';
+        document.body.appendChild(tmp);
+        tmp.click();
+        document.body.removeChild(tmp);
+        // Reuse blob URL on the visible link
+        downloadLink.href = blobUrl;
+
+        if (result.summary) {
+          try {
+            var summary = JSON.parse(result.summary);
+            totalCount.textContent = summary.total != null ? summary.total : '-';
+            layerTbody.innerHTML = '';
+            ['L1', 'L2', 'L3', 'FALLBACK'].forEach(function (key) {
+              var tr = document.createElement('tr');
+              var td1 = document.createElement('td');
+              td1.textContent = key;
+              var td2 = document.createElement('td');
+              td2.className = 'count';
+              td2.textContent = summary[key] != null ? summary[key] : 0;
+              tr.appendChild(td1);
+              tr.appendChild(td2);
+              layerTbody.appendChild(tr);
+            });
+          } catch (e) {
+            // summary parse failure is non-fatal
+          }
+        }
+        show(resultsPanel);
+      })
+      .catch(function (err) {
+        errorMessage.textContent = err && err.message ? err.message : String(err);
+        show(errorPanel);
+      })
+      .finally(function () {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '开始处理';
+      });
+  });
+})();
+</script>
+</body>
+</html>

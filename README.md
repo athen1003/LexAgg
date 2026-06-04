@@ -41,6 +41,7 @@ python scripts/smoke_test_server.py
 |---|---|---|
 | `/api/v1/health` | GET | 健康检查 |
 | `/api/v1/normalize` | POST | 上传 txt 归一。`?model=fasttext\|bge&debug=0\|1` |
+| `/api/v1/normalize/excel` | POST | 上传 xlsx 归一（详见 [Excel 上传](#excel-上传)） |
 | `/api/v1/admin/reload` | POST | 热更新词库（受 ADMIN_TOKEN 保护，详见下） |
 
 ## 管理端鉴权
@@ -53,6 +54,34 @@ curl -X POST -H "Authorization: Bearer <secret>" http://host:8000/api/v1/admin/r
 ```
 
 未携带或 token 不匹配时返回 `401 {"error": "unauthorized"}`。
+
+## Excel 上传
+
+`POST /api/v1/normalize/excel` 接受 xlsx 批量归一。Web UI 直接打开 `http://localhost:8000/` 即可使用。
+
+**输入格式（multipart upload，field=`file`）：**
+- 列 0 = 原词（必填）
+- 列 1 = 极性提示（可选：`正面` / `负面` / 其他；仅为信息回显，**不影响匹配极性**）
+- 无表头（按数据读取）
+- 第 0 列为空 / 空白 / NaN 的行会被跳过
+- 上限 50,000 行；超过返回 `400 {"error": "too_many_rows", "limit": 50000}`
+
+**查询参数：**
+- `model=bge`（默认） / `fasttext`
+- `debug=0`（当前为对齐参数，暂无差异）
+
+**输出格式（xlsx，列顺序固定）：**
+1. `原词` —— 输入原词
+2. `归一词` —— 归一后的标准词
+3. `命中层级` —— `L1` / `L2` / `L3` / `FALLBACK`
+4. `分数` —— 相似度，保留 4 位小数
+5. `输入极性` —— 透传输入列 1 的内容
+
+响应头中携带 `X-Summary`（JSON 字符串），供前端展示层级分布：
+
+```
+X-Summary: {"total": 123, "L1": 80, "L2": 30, "L3": 5, "FALLBACK": 8}
+```
 
 ## 归一层级
 
