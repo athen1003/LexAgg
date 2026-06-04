@@ -7,8 +7,10 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import pandas as pd
 from fastapi import FastAPI, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.embedding import ModelNotFoundError, get_model
 from app.normalizer import Normalizer
@@ -16,6 +18,7 @@ from app.vocabulary import Vocabulary, VocabularyLoadError
 
 DEFAULT_VOCAB_PATH = os.environ.get("VOCAB_PATH", "data/vocabulary.csv")
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_EXCEL_ROWS = 50_000
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN")  # None → 仅允许 loopback
 
 logger = logging.getLogger("wordtest")
@@ -162,6 +165,109 @@ async def normalize(
     )
 
 
+def _cell_to_str(v) -> str:
+    """把 pandas 单元格值规整成字符串：None / NaN → ''。"""
+    if v is None:
+        return ""
+    # pandas 把缺失单元格读成 float('nan')
+    if isinstance(v, float):
+        return ""
+    return str(v)
+
+
+@app.post("/api/v1/normalize/excel")
+async def normalize_excel(
+    file: UploadFile = File(...),
+    model: str = Query("bge"),
+    debug: int = Query(0),  # 接受但暂未使用（与 txt 端点参数对齐）
+):
+    # 1. 流式读取 + 大小限制
+    CHUNK = 64 * 1024
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_FILE_SIZE:
+            return JSONResponse(status_code=413, content={"error": "file_too_large"})
+        chunks.append(chunk)
+    content = b"".join(chunks)
+
+    # 2. 校验 xlsx：按文件名后缀或 content_type 至少一项命中
+    fname = (file.filename or "").lower()
+    ctype = (file.content_type or "").lower()
+    is_xlsx = fname.endswith(".xlsx") or "spreadsheet" in ctype or "openxmlformats" in ctype
+    if not is_xlsx:
+        return JSONResponse(status_code=400, content={"error": "invalid_file_type"})
+
+    # 3. 解析 xlsx（无表头，列 0 = 原词，列 1 = 极性提示）
+    try:
+        df = pd.read_excel(io.BytesIO(content), dtype=str, header=None)
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid_file_type"})
+
+    if len(df) > MAX_EXCEL_ROWS:
+        return JSONResponse(
+            status_code=400, content={"error": "too_many_rows", "limit": MAX_EXCEL_ROWS}
+        )
+
+    # 4. 取 normalizer
+    try:
+        normalizer = _get_normalizer(model)
+    except ModelNotFoundError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "unknown_model", "supported": ["bge", "fasttext"]},
+        )
+
+    # 5. 逐行归一
+    t0 = time.time()
+    out_rows: list[dict] = []
+    layer_counts = {"L1": 0, "L2": 0, "L3": 0, "FALLBACK": 0}
+    for _, row in df.iterrows():
+        word = _cell_to_str(row.iloc[0]).strip() if len(row) >= 1 else ""
+        # 极性提示：仅作信息回显，不影响匹配
+        polarity_hint = _cell_to_str(row.iloc[1]) if len(row) >= 2 else ""
+        if not word:
+            continue
+        result = normalizer.normalize(word)
+        layer_counts[result.matched_layer] += 1
+        out_rows.append(
+            {
+                "原词": word,
+                "归一词": result.normalized,
+                "命中层级": result.matched_layer,
+                "分数": round(result.score, 4),
+                "输入极性": polarity_hint,
+            }
+        )
+    elapsed = time.time() - t0
+
+    logger.info(
+        f"POST /normalize/excel {len(out_rows)} rows model={model} elapsed={elapsed:.1f}s"
+    )
+
+    # 6. 写 xlsx
+    out_df = pd.DataFrame(
+        out_rows, columns=["原词", "归一词", "命中层级", "分数", "输入极性"]
+    )
+    buf = io.BytesIO()
+    out_df.to_excel(buf, index=False, engine="openpyxl")
+    buf.seek(0)
+
+    summary = {"total": len(out_rows), **layer_counts}
+    return StreamingResponse(
+        io.BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": "attachment; filename=normalized.xlsx",
+            "X-Summary": json.dumps(summary, ensure_ascii=False),
+        },
+    )
+
+
 def _is_loopback(client_host: str | None) -> bool:
     """判断请求来源是否为 loopback（127.0.0.0/8 或 ::1）。"""
     if not client_host:
@@ -213,3 +319,8 @@ async def reload_vocab(request: Request):
         "正面": len(vocab.buckets["正面"]),
         "负面": len(vocab.buckets["负面"]),
     }
+
+
+# 静态前端（必须放在所有 API 路由之后，避免 shadow）
+os.makedirs("static", exist_ok=True)
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
