@@ -89,6 +89,32 @@ class Vocabulary:
     def get_bucket(self, polarity: str) -> list[str]:
         return self.buckets.get(polarity, [])
 
+    @classmethod
+    def load_from_rows(cls, rows: list[tuple[str, str]], alias_map: dict[str, str] | None = None) -> "Vocabulary":
+        """测试用：直接构造，无需 CSV 文件。"""
+        buckets: dict[str, list[str]] = {"正面": [], "负面": []}
+        polarity_map: dict[str, str] = {}
+        amap = dict(alias_map or {})
+
+        for word, polarity in rows:
+            if polarity not in {"正面", "负面"}:
+                raise VocabularyLoadError(f"非法极性: {polarity}")
+            if word in polarity_map:
+                raise VocabularyLoadError(f"重复: {word}")
+            buckets[polarity].append(word)
+            polarity_map[word] = polarity
+
+        # 别名词也入桶
+        for variant, std in amap.items():
+            if variant in polarity_map:
+                continue
+            std_polarity = polarity_map.get(std)
+            if std_polarity:
+                buckets[std_polarity].append(variant)
+                polarity_map[variant] = std_polarity
+
+        return cls(buckets=buckets, polarity_map=polarity_map, alias_map=amap)
+
     def reload(self, csv_path: str) -> None:
         new = Vocabulary.load(csv_path)
         self.buckets = new.buckets
