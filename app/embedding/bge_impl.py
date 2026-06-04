@@ -13,7 +13,9 @@ from app.embedding.base import EmbeddingModel
 
 class BgeEmbedding(EmbeddingModel):
     _MODEL_NAME = "BAAI/bge-small-zh-v1.5"
-    _CACHE_DIR = str(Path(__file__).resolve().parent.parent / "models" / "bge")
+    _CACHE_DIR = str(
+        Path(__file__).resolve().parent.parent.parent / "models" / "bge"
+    )
 
     def __init__(self, model_name: str | None = None):
         self.model_name = model_name or self._MODEL_NAME

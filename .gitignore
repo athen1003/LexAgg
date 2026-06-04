@@ -10,4 +10,5 @@ venv/
 models/*.bin
 models/*.vec
 models/bge/
+app/models/
 data/vocabulary.local.csv
