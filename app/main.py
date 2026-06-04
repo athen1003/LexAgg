@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Query, Request, UploadFile
@@ -17,12 +18,19 @@ DEFAULT_VOCAB_PATH = os.environ.get("VOCAB_PATH", "data/vocabulary.csv")
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN")  # None → 仅允许 loopback
 
-app = FastAPI(title="Word Normalizer", version="0.1.0")
-
 logger = logging.getLogger("wordtest")
 
 # 启动时加载
 _state: dict = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _load_state(DEFAULT_VOCAB_PATH)
+    yield
+
+
+app = FastAPI(title="Word Normalizer", version="0.1.0", lifespan=lifespan)
 
 
 def _load_state(vocab_path: str) -> None:
@@ -73,11 +81,6 @@ def _get_normalizer(model: str) -> Normalizer:
     return normalizer
 
 
-@app.on_event("startup")
-def startup():
-    _load_state(DEFAULT_VOCAB_PATH)
-
-
 @app.get("/api/v1/health")
 async def health():
     vocab = _state.get("vocab")
@@ -98,9 +101,19 @@ async def normalize(
     model: str = Query("bge"),
     debug: int = Query(0),
 ):
-    content = await file.read()
-    if len(content) > MAX_FILE_SIZE:
-        return JSONResponse(status_code=413, content={"error": "file_too_large"})
+    # 流式读取，避免大文件一次性缓冲到内存；累积超过 MAX_FILE_SIZE 立即 413
+    CHUNK = 64 * 1024
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_FILE_SIZE:
+            return JSONResponse(status_code=413, content={"error": "file_too_large"})
+        chunks.append(chunk)
+    content = b"".join(chunks)
 
     try:
         text = content.decode("utf-8")

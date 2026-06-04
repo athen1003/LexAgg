@@ -4,7 +4,9 @@
 若用户已有 cc.zh.300.bin 全量版，可放入 models/ 跳过下载。
 
 注：Task 4 已用 gensim 替代 fasttext-wheel。gensim 通过
-KeyedVectors.load_word2vec_format 同样能加载 Facebook 官方 .bin 文件。
+gensim.models.fasttext.load_facebook_vectors 加载 Facebook 官方
+.bin 文件（.bin 是私有二进制格式，不是 word2vec binary，所以
+不能直接用 KeyedVectors.load_word2vec_format）。
 """
 import os
 import sys

@@ -5,6 +5,8 @@ __pycache__/
 venv/
 .env
 .pytest_cache/
+.idea/
+.vscode/
 models/*.bin
 models/*.vec
 models/bge/

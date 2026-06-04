@@ -58,8 +58,8 @@ curl -X POST -H "Authorization: Bearer <secret>" http://host:8000/api/v1/admin/r
 
 每条结果标注命中层级：
 - `L1`：别名表 / 词库精确命中
-- `L2`：BGE/fastText 余弦相似度 ≥ 阈值（BGE 0.7, fastText 0.6）
-- `L3`：编辑距离比率 ≤ 0.3
+- `L2`：BGE/fastText 余弦相似度 ≥ 接受阈值（BGE 0.7, fastText 0.6）
+- `L3`：L2 落入「接受-降级」区间（BGE 0.5–0.7, fastText 0.4–0.6）时，按编辑距离比率 ≤ 0.3 兜底
 - `FALLBACK`：未匹配，返回原词
 
 ## 开发
@@ -74,6 +74,8 @@ pytest tests/test_accuracy.py -v -s
 
 ## 调优
 
-- 阈值在 `app/normalizer.py:Normalizer.THRESHOLDS`
+- 阈值在 `app/normalizer.py:Normalizer.THRESHOLDS`：
+  - `accept` = L2 接受阈值（BGE 0.7, fastText 0.6）
+  - `fallback_to_edit` = L3 降级阈值（BGE 0.5, fastText 0.4）
 - 编辑距离比率 `Normalizer.EDIT_DISTANCE_RATIO = 0.3`
 - 运营期失败用例直接补到 `data/aliases.json` 即可

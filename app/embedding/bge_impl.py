@@ -13,7 +13,7 @@ from app.embedding.base import EmbeddingModel
 
 class BgeEmbedding(EmbeddingModel):
     _MODEL_NAME = "BAAI/bge-small-zh-v1.5"
-    _CACHE_DIR = "models/bge"
+    _CACHE_DIR = str(Path(__file__).resolve().parent.parent / "models" / "bge")
 
     def __init__(self, model_name: str | None = None):
         self.model_name = model_name or self._MODEL_NAME
@@ -24,7 +24,12 @@ class BgeEmbedding(EmbeddingModel):
         import torch
         from sentence_transformers import SentenceTransformer
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
         Path(self._CACHE_DIR).mkdir(parents=True, exist_ok=True)
         self._model = SentenceTransformer(
             self.model_name,
@@ -35,7 +40,7 @@ class BgeEmbedding(EmbeddingModel):
 
     def encode(self, words: list[str]) -> np.ndarray:
         if self._model is None:
-            return np.zeros((len(words), self.dim), dtype=np.float32)
+            raise RuntimeError("BgeEmbedding.encode called before load()")
         # normalize_embeddings=True 让 cosine 退化为点积
         vecs = self._model.encode(
             words,
