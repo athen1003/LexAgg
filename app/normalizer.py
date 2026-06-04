@@ -4,7 +4,7 @@ from typing import Literal
 
 import numpy as np
 
-from app.similarity import cosine_batch
+from app.similarity import cosine_batch, levenshtein_ratio
 from app.vocabulary import Vocabulary
 
 
@@ -50,12 +50,18 @@ class Normalizer:
     def _normalize_inner(self, word: str) -> NormalizeResult:
         polarity = self._infer_polarity(word)
 
-        if polarity is not None:
-            return self._match_in_bucket(word, polarity)
+        # Always encode once up front. The L1 branches in _match_in_bucket
+        # may return early (cheap), but for unknown-polarity / L1-miss cases
+        # we want the same vector threaded through both bucket evaluations
+        # to avoid encoding the same input word twice.
+        word_vec = self.embedding.encode([word])[0]
 
-        # 极性未知 → 双桶对比取高
-        r_pos = self._match_in_bucket(word, "正面")
-        r_neg = self._match_in_bucket(word, "负面")
+        if polarity is not None:
+            return self._match_in_bucket(word, polarity, word_vec)
+
+        # 极性未知 → 双桶对比取高（共用同一 word_vec）
+        r_pos = self._match_in_bucket(word, "正面", word_vec)
+        r_neg = self._match_in_bucket(word, "负面", word_vec)
         if r_pos.matched_layer != "FALLBACK" and (
             r_neg.matched_layer == "FALLBACK" or r_pos.score >= r_neg.score
         ):
@@ -75,7 +81,9 @@ class Normalizer:
         # 再查 polarity_map（输入词就是标准词）
         return self.vocab.polarity_map.get(word)
 
-    def _match_in_bucket(self, word: str, polarity: str) -> NormalizeResult:
+    def _match_in_bucket(
+        self, word: str, polarity: str, word_vec: np.ndarray
+    ) -> NormalizeResult:
         candidates = self.vocab.get_bucket(polarity)
         if not candidates:
             return NormalizeResult(
@@ -97,8 +105,7 @@ class Normalizer:
                     original=word, normalized=word, matched_layer="L1", score=1.0, elapsed_ms=0.0
                 )
 
-        # L2 向量相似度
-        word_vec = self.embedding.encode([word])[0]
+        # L2 向量相似度（word_vec 由调用方预编码，避免重复 encode）
         cand_vecs = self._precomputed[polarity]
         sims = cosine_batch(word_vec, cand_vecs)
         best_idx = int(np.argmax(sims))
@@ -113,8 +120,6 @@ class Normalizer:
 
         # L3 编辑距离（fallback）
         if best_sim >= thresholds["fallback_to_edit"]:
-            from app.similarity import levenshtein_ratio
-
             ratios = [levenshtein_ratio(word, c) for c in candidates]
             best_idx = int(np.argmin(ratios))
             best_ratio = ratios[best_idx]

@@ -1,11 +1,12 @@
 import io
+import ipaddress
 import json
 import logging
 import os
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, File, Query, UploadFile
+from fastapi import FastAPI, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.embedding import ModelNotFoundError, get_model
@@ -14,6 +15,7 @@ from app.vocabulary import Vocabulary, VocabularyLoadError
 
 DEFAULT_VOCAB_PATH = os.environ.get("VOCAB_PATH", "data/vocabulary.csv")
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN")  # None → 仅允许 loopback
 
 app = FastAPI(title="Word Normalizer", version="0.1.0")
 
@@ -50,12 +52,25 @@ def _load_state(vocab_path: str) -> None:
 
     _state["vocab"] = vocab
     _state["vocab_path"] = vocab_path
-    # 默认模型预加载
+    # 按模型名缓存 Normalizer：默认 bge 启动时建，其他模型首次请求时懒建
+    _state["normalizers"] = {}
     try:
         default_emb = get_model("bge")
-        _state["default_normalizer"] = Normalizer(default_emb, vocab)
+        _state["normalizers"]["bge"] = Normalizer(default_emb, vocab)
     except Exception:
-        _state["default_normalizer"] = None
+        # 启动时模型加载失败时，不阻塞；后续请求再尝试
+        pass
+
+
+def _get_normalizer(model: str) -> Normalizer:
+    """按 model 名取缓存的 Normalizer；缺失则构建并缓存。"""
+    cached = _state["normalizers"].get(model)
+    if cached is not None:
+        return cached
+    embedding = get_model(model)
+    normalizer = Normalizer(embedding, _state["vocab"])
+    _state["normalizers"][model] = normalizer
+    return normalizer
 
 
 @app.on_event("startup")
@@ -98,14 +113,13 @@ async def normalize(
 
     vocab = _state["vocab"]
     try:
-        embedding = get_model(model)
+        normalizer = _get_normalizer(model)
     except ModelNotFoundError:
         return JSONResponse(
             status_code=400,
             content={"error": "unknown_model", "supported": ["bge", "fasttext"]},
         )
 
-    normalizer = Normalizer(embedding, vocab)
     t0 = time.time()
     results = [normalizer.normalize(line) for line in lines]
     elapsed = time.time() - t0
@@ -135,8 +149,45 @@ async def normalize(
     )
 
 
+def _is_loopback(client_host: str | None) -> bool:
+    """判断请求来源是否为 loopback（127.0.0.0/8 或 ::1）。"""
+    if not client_host:
+        return False
+    try:
+        ip = ipaddress.ip_address(client_host)
+    except ValueError:
+        return False
+    return ip.is_loopback
+
+
+def _check_admin_auth(client_host: str | None, auth_header: str | None) -> JSONResponse | None:
+    """校验管理端权限。返回 None 表示通过；返回 JSONResponse 表示拒绝。
+
+    client_host: 来自 request.client.host，可为 None（无连接信息时按非 loopback 处理）
+    auth_header: 来自 request.headers.get('authorization')，可为空
+    """
+    token = ADMIN_TOKEN
+    if token is None:
+        # 未配置 ADMIN_TOKEN → 仅 loopback 允许
+        if _is_loopback(client_host):
+            return None
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    presented = auth_header[len("Bearer "):].strip()
+    if presented != token:
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    return None
+
+
 @app.post("/api/v1/admin/reload")
-async def reload_vocab():
+async def reload_vocab(request: Request):
+    denied = _check_admin_auth(
+        request.client.host if request.client else None,
+        request.headers.get("authorization"),
+    )
+    if denied is not None:
+        return denied
     try:
         _load_state(_state.get("vocab_path", DEFAULT_VOCAB_PATH))
     except VocabularyLoadError as e:

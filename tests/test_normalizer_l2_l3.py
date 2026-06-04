@@ -28,11 +28,11 @@ def test_l2_high_similarity_returns_top1(vocab, monkeypatch):
     n = Normalizer(_StubEmbedding(), vocab)
     original_inner = n._match_in_bucket
 
-    def patched_inner(word, polarity):
+    def patched_inner(word, polarity, word_vec):
         candidates = vocab.get_bucket(polarity)
         scores = {"凉感适宜": 0.8, "舒适": 0.5, "轻薄": 0.4}
         _CURRENT_BEST.append((word, scores, candidates))
-        return original_inner(word, polarity)
+        return original_inner(word, polarity, word_vec)
 
     monkeypatch.setattr(n, "_match_in_bucket", patched_inner)
 
@@ -50,11 +50,11 @@ def test_l2_below_threshold_falls_through(vocab, monkeypatch):
     n = Normalizer(_StubEmbedding(), vocab)
     original_inner = n._match_in_bucket
 
-    def patched_inner(word, polarity):
+    def patched_inner(word, polarity, word_vec):
         candidates = vocab.get_bucket(polarity)
         scores = {c: 0.1 for c in candidates}  # 全低
         _CURRENT_BEST.append((word, scores, candidates))
-        return original_inner(word, polarity)
+        return original_inner(word, polarity, word_vec)
 
     monkeypatch.setattr(n, "_match_in_bucket", patched_inner)
 
@@ -72,11 +72,11 @@ def test_l3_match_with_low_edit_ratio(vocab, monkeypatch):
     n = Normalizer(_StubEmbedding(), vocab)
     original_inner = n._match_in_bucket
 
-    def patched_inner(word, polarity):
+    def patched_inner(word, polarity, word_vec):
         candidates = vocab.get_bucket(polarity)
         scores = {c: 0.5 if c == "凉感适宜" else 0.0 for c in candidates}
         _CURRENT_BEST.append((word, scores, candidates))
-        return original_inner(word, polarity)
+        return original_inner(word, polarity, word_vec)
 
     monkeypatch.setattr(n, "_match_in_bucket", patched_inner)
 
@@ -94,11 +94,11 @@ def test_l3_reject_high_edit_ratio(vocab, monkeypatch):
     n = Normalizer(_StubEmbedding(), vocab)
     original_inner = n._match_in_bucket
 
-    def patched_inner(word, polarity):
+    def patched_inner(word, polarity, word_vec):
         candidates = vocab.get_bucket(polarity)
         scores = {c: 0.5 for c in candidates}  # 都中等
         _CURRENT_BEST.append((word, scores, candidates))
-        return original_inner(word, polarity)
+        return original_inner(word, polarity, word_vec)
 
     monkeypatch.setattr(n, "_match_in_bucket", patched_inner)
 

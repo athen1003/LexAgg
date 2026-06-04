@@ -41,7 +41,18 @@ python scripts/smoke_test_server.py
 |---|---|---|
 | `/api/v1/health` | GET | 健康检查 |
 | `/api/v1/normalize` | POST | 上传 txt 归一。`?model=fasttext\|bge&debug=0\|1` |
-| `/api/v1/admin/reload` | POST | 热更新词库 |
+| `/api/v1/admin/reload` | POST | 热更新词库（受 ADMIN_TOKEN 保护，详见下） |
+
+## 管理端鉴权
+
+`/api/v1/admin/reload` 默认仅允许 loopback（`127.0.0.1`、`::1`）访问；如需远程调用，
+设置环境变量 `ADMIN_TOKEN=<secret>`，然后用 Bearer header 调用：
+
+```bash
+curl -X POST -H "Authorization: Bearer <secret>" http://host:8000/api/v1/admin/reload
+```
+
+未携带或 token 不匹配时返回 `401 {"error": "unauthorized"}`。
 
 ## 归一层级
 

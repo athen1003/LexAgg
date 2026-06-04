@@ -65,9 +65,24 @@ def test_normalize_invalid_encoding_400(app_with_stub, tmp_path):
     assert response.json()["error"] == "invalid_encoding"
 
 
-def test_reload_success(app_with_stub, tmp_path):
-    client, _ = app_with_stub
-    response = client.post("/api/v1/admin/reload")
+def test_reload_success(app_with_stub, tmp_path, monkeypatch):
+    """Reload with ADMIN_TOKEN=secret and a matching Bearer header.
+
+    TestClient sends from 'testclient' host which is not real loopback,
+    so we use the token path here. The loopback-only path is covered by
+    unit tests in test_admin_reload_auth.py.
+    """
+    monkeypatch.setenv("ADMIN_TOKEN", "test-secret")
+    # Reload main so ADMIN_TOKEN is picked up.
+    import importlib
+    from app import main as main_module
+    importlib.reload(main_module)
+    from fastapi.testclient import TestClient
+    with TestClient(main_module.app) as client:
+        response = client.post(
+            "/api/v1/admin/reload",
+            headers={"Authorization": "Bearer test-secret"},
+        )
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"

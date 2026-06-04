@@ -39,14 +39,14 @@ def test_unknown_polarity_picks_higher_score(vocab, monkeypatch):
     n = Normalizer(_StubEmbedding(), vocab)
     original_inner = n._match_in_bucket
 
-    def patched_inner(word, polarity):
+    def patched_inner(word, polarity, word_vec):
         candidates = vocab.get_bucket(polarity)
         if polarity == "正面":
             scores = {"舒适": 0.7, "柔软": 0.6}
         else:
             scores = {c: 0.5 for c in candidates}
         _CURRENT_BEST.append((word, scores, candidates))
-        return original_inner(word, polarity)
+        return original_inner(word, polarity, word_vec)
 
     monkeypatch.setattr(n, "_match_in_bucket", patched_inner)
 
