@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+.pytest_cache/
+models/*.bin
+models/*.vec
+data/vocabulary.local.csv
