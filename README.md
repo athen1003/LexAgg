@@ -10,8 +10,11 @@ python -m venv .venv
 source .venv/Scripts/activate
 pip install -r requirements.txt
 
-# 2. 下载 fastText 中文模型
-python scripts/download_model.py
+# 2. （可选）首次启动会自动下载 BGE 模型到 models/bge/（~95MB）
+#     如需用 fastText 备选模型，运行：python scripts/download_model.py
+
+# 国内用户如 HuggingFace 联网慢，设置镜像：
+#     export HF_ENDPOINT=https://hf-mirror.com
 
 # 3. 启动服务
 uvicorn app.main:app --port 8000
@@ -44,7 +47,7 @@ python scripts/smoke_test_server.py
 
 每条结果标注命中层级：
 - `L1`：别名表 / 词库精确命中
-- `L2`：fastText 余弦相似度 ≥ 阈值（默认 0.6）
+- `L2`：BGE/fastText 余弦相似度 ≥ 阈值（BGE 0.7, fastText 0.6）
 - `L3`：编辑距离比率 ≤ 0.3
 - `FALLBACK`：未匹配，返回原词
 

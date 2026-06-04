@@ -52,7 +52,7 @@ def _load_state(vocab_path: str) -> None:
     _state["vocab_path"] = vocab_path
     # 默认模型预加载
     try:
-        default_emb = get_model("fasttext")
+        default_emb = get_model("bge")
         _state["default_normalizer"] = Normalizer(default_emb, vocab)
     except Exception:
         _state["default_normalizer"] = None
@@ -68,7 +68,7 @@ async def health():
     vocab = _state.get("vocab")
     return {
         "status": "ok",
-        "default_model": "fasttext",
+        "default_model": "bge",
         "vocab_size": (
             len(vocab.buckets["正面"]) + len(vocab.buckets["负面"])
             if vocab
@@ -80,7 +80,7 @@ async def health():
 @app.post("/api/v1/normalize")
 async def normalize(
     file: UploadFile = File(...),
-    model: str = Query("fasttext"),
+    model: str = Query("bge"),
     debug: int = Query(0),
 ):
     content = await file.read()
@@ -102,7 +102,7 @@ async def normalize(
     except ModelNotFoundError:
         return JSONResponse(
             status_code=400,
-            content={"error": "unknown_model", "supported": ["fasttext", "bge"]},
+            content={"error": "unknown_model", "supported": ["bge", "fasttext"]},
         )
 
     normalizer = Normalizer(embedding, vocab)

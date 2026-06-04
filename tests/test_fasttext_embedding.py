@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pytest
 
@@ -21,12 +23,11 @@ def test_encode_without_load_returns_zeros():
 
 
 @pytest.mark.skipif(
-    not pytest.importorskip("gensim", reason="gensim 未安装"),
-    reason="gensim 未安装",
+    not os.environ.get("WORDTEST_TEST_FASTTEXT"),
+    reason="fastText 7GB 加载慢，需设置 WORDTEST_TEST_FASTTEXT=1 主动启用",
 )
 def test_encode_known_word_returns_vector():
     """如果真实模型存在，加载后能编码"""
-    import os
     model_path = "models/cc.zh.300.bin"
     if not os.path.exists(model_path):
         pytest.skip("models/cc.zh.300.bin 不存在，需要先运行 scripts/download_model.py")
@@ -38,12 +39,11 @@ def test_encode_known_word_returns_vector():
 
 
 @pytest.mark.skipif(
-    not pytest.importorskip("gensim", reason="gensim 未安装"),
-    reason="gensim 未安装",
+    not os.environ.get("WORDTEST_TEST_FASTTEXT"),
+    reason="fastText 7GB 加载慢，需设置 WORDTEST_TEST_FASTTEXT=1 主动启用",
 )
 def test_encode_oov_returns_non_zero_via_subword_split():
     """OOV 词用拆字符平均回退，返回非零向量"""
-    import os
     model_path = "models/cc.zh.300.bin"
     if not os.path.exists(model_path):
         pytest.skip("模型不存在")

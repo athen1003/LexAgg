@@ -1,20 +1,49 @@
-"""占位实现，由后续 Task（按需）替换为真实 BGE。"""
+"""BGE-small-zh embedding via sentence-transformers.
+
+Auto-adapts device: uses CUDA if available, falls back to CPU.
+Model: BAAI/bge-small-zh-v1.5 (~95MB, dim=512)
+Auto-downloads on first use to local models/bge/ cache.
+"""
+from pathlib import Path
+
 import numpy as np
 
 from app.embedding.base import EmbeddingModel
 
 
 class BgeEmbedding(EmbeddingModel):
-    def __init__(self, model_name: str = "BAAI/bge-small-zh-v1.5"):
-        self.model_name = model_name
+    _MODEL_NAME = "BAAI/bge-small-zh-v1.5"
+    _CACHE_DIR = "models/bge"
+
+    def __init__(self, model_name: str | None = None):
+        self.model_name = model_name or self._MODEL_NAME
         self._model = None
+        self._device = "unknown"
 
     def load(self) -> None:
-        # 实际实现见 BGE Task（按需）
-        self._model = None
+        import torch
+        from sentence_transformers import SentenceTransformer
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        Path(self._CACHE_DIR).mkdir(parents=True, exist_ok=True)
+        self._model = SentenceTransformer(
+            self.model_name,
+            device=device,
+            cache_folder=self._CACHE_DIR,
+        )
+        self._device = device
 
     def encode(self, words: list[str]) -> np.ndarray:
-        return np.zeros((len(words), 512), dtype=np.float32)
+        if self._model is None:
+            return np.zeros((len(words), self.dim), dtype=np.float32)
+        # normalize_embeddings=True 让 cosine 退化为点积
+        vecs = self._model.encode(
+            words,
+            normalize_embeddings=True,
+            batch_size=64,
+            show_progress_bar=False,
+        )
+        return np.asarray(vecs, dtype=np.float32)
 
     @property
     def name(self) -> str:
