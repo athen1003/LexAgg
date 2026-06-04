@@ -1,6 +1,6 @@
 fastapi==0.115.*
 uvicorn[standard]==0.32.*
-fasttext-wheel==0.9.*
+gensim>=4.3,<5.0  # 替代 fasttext-wheel（官方 fasttext 在 Python 3.13.5 上 pybind11 API 不兼容，编译失败）
 python-Levenshtein==0.26.*
 numpy>=1.24
 pandas>=2.0

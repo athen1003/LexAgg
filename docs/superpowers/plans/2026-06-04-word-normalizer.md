@@ -6,7 +6,7 @@
 
 **Architecture:** FastAPI 服务 + 词库按极性分桶 + 三层匹配（L1 别名字典 / L2 fastText 余弦 / L3 编辑距离）。极性由词库标注，归一时只在同极性桶内找最匹配。
 
-**Tech Stack:** Python 3.11+、FastAPI、Uvicorn、fastText（fasttext-wheel）、python-Levenshtein、numpy、pandas、pytest
+**Tech Stack:** Python 3.11+（开发/生产已验证 3.13.5）、FastAPI、Uvicorn、fastText 模型（**通过 gensim 加载**——详见 Task 6 注释：原计划 fasttext-wheel==0.9.* 在 Python 3.13.5 上 pybind11 API 不兼容无法编译，已切到 `gensim>=4.3` 加载 Facebook fastText .bin 模型）、python-Levenshtein、numpy、pandas、pytest
 
 **Spec:** `docs/superpowers/specs/2026-06-04-word-normalizer-design.md`
 
@@ -922,6 +922,14 @@ git commit -m "feat: download script for fastText Chinese model"
 
 ## Task 6: FastTextEmbedding 真实实现
 
+> **2026-06-04 包替换说明**：原计划用 `fasttext-wheel==0.9.*` 或官方 `fasttext` 包，但两者在 **Python 3.13.5** 上都因为 pybind11 API 不兼容而编译失败（已实测）。最终方案：**用 `gensim>=4.3` 加载 Facebook fastText `.bin` 模型**。
+>
+> 影响：
+> 1. `requirements.txt` 已把 `fasttext-wheel==0.9.*` 改为 `gensim>=4.3,<5.0`（Task 1 修复时落地）
+> 2. 加载方式从 `fasttext.load_model(path)` 改为 `gensim.models.KeyedVectors.load_word2vec_format(path, binary=True)`（注意：fastText 的 `.bin` 模型是 word2vec 扩展格式，gensim 兼容）
+> 3. 取向量：`wv.get_vector(w, norm=True)`（gensim 默认归一化）；OOV 处理：先 `try: wv[w]` 捕获 `KeyError`，再回退到拆字符求平均（**重要**：fastText 原生支持 subword，gensim 不支持，因此 OOV 词质量会下降，**强烈建议**运营期把失败用例回流到 `data/aliases.json`）
+> 4. `scripts/download_model.py` 保持不变——下载的还是 Facebook fastText 的 `.bin` 文件，gensim 同样能读
+
 **Files:**
 - Modify: `D:\workspace\claude\wordtest\app\embedding\fasttext_impl.py`
 - Create: `D:\workspace\claude\wordtest\tests\test_fasttext_embedding.py`
@@ -943,16 +951,16 @@ def _write_dummy_model(tmp_path) -> str:
 
 
 @pytest.mark.skipif(
-    not pytest.importorskip("fasttext", reason="fasttext 未安装"),
-    reason="fasttext 未安装",
+    not pytest.importorskip("gensim", reason="gensim 未安装"),
+    reason="gensim 未安装",
 )
 def test_encode_known_word(tmp_path):
     pytest.skip("依赖真实模型，由人工运行")
 
 
 @pytest.mark.skipif(
-    not pytest.importorskip("fasttext", reason="fasttext 未安装"),
-    reason="fasttext 未安装",
+    not pytest.importorskip("gensim", reason="gensim 未安装"),
+    reason="gensim 未安装",
 )
 def test_encode_oov_word_returns_nonzero(tmp_path):
     pytest.skip("依赖真实模型，由人工运行")
@@ -1000,18 +1008,33 @@ class FastTextEmbedding(EmbeddingModel):
                 f"fastText 模型不存在: {self.model_path}，"
                 f"请运行: python scripts/download_model.py"
             )
-        import fasttext
+        from gensim.models import KeyedVectors
 
-        self._model = fasttext.load_model(str(path))
+        # Facebook fastText .bin 是 word2vec 扩展格式，gensim 兼容加载
+        self._model = KeyedVectors.load_word2vec_format(str(path), binary=True)
 
     def encode(self, words: list[str]) -> np.ndarray:
         if self._model is None:
             # 模型未加载（测试占位）：返回零向量
             return np.zeros((len(words), self.dim), dtype=np.float32)
-        return np.array(
-            [self._model.get_word_vector(w) for w in words],
-            dtype=np.float32,
-        )
+        vecs: list[np.ndarray] = []
+        for w in words:
+            try:
+                vecs.append(self._model.get_vector(w, norm=True))
+            except KeyError:
+                # gensim 不支持 subword，OOV 词回退到拆字符平均（不是最优解，
+                # 但比零向量好；生产环境建议把 OOV 词补到 data/aliases.json）
+                chars = [c for c in w if c in self._model.key_to_index]
+                if chars:
+                    vecs.append(
+                        np.mean(
+                            [self._model.get_vector(c, norm=True) for c in chars],
+                            axis=0,
+                        )
+                    )
+                else:
+                    vecs.append(np.zeros(self.dim, dtype=np.float32))
+        return np.array(vecs, dtype=np.float32)
 
     @property
     def name(self) -> str:
