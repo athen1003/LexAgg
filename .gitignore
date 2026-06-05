@@ -5,6 +5,8 @@ __pycache__/
 venv/
 .env
 .pytest_cache/
-models/*.bin
-models/*.vec
+.idea/
+.vscode/
+models/
+app/models/
 data/vocabulary.local.csv
