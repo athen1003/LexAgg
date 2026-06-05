@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 def client_with_small_limit(monkeypatch, tmp_path):
     """TestClient with MAX_FILE_SIZE overridden to a small value (1KB)."""
     csv = tmp_path / "vocab.csv"
-    csv.write_text("词,极性\n舒适,正面\n不舒适,负面\n", encoding="utf-8")
+    csv.write_text("大类,词,极性\n体感,舒适,正面\n体感,不舒适,负面\n", encoding="utf-8")
 
     for mod_name in list(sys.modules.keys()):
         if mod_name.startswith("app"):
@@ -42,6 +42,8 @@ def client_with_small_limit(monkeypatch, tmp_path):
 
     factory.reset_models()
     factory._REGISTRY["bge"] = _Stub
+    factory._REGISTRY["bge_base"] = _Stub
+    factory._REGISTRY["m3e"] = _Stub
     factory._REGISTRY["fasttext"] = _Stub
     factory._registered = True
 

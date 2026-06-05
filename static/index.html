@@ -101,12 +101,15 @@
       <div class="field">
         <label for="model-select">模型</label>
         <select id="model-select">
-          <option value="bge" selected>bge</option>
-          <option value="fasttext">fasttext</option>
+          <option value="m3e" selected>m3e（推荐，口语化最强）</option>
+          <option value="bge">bge（轻量，95MB）</option>
+          <option value="bge_base">bge_base（400MB）</option>
+          <option value="fasttext">fasttext（备选）</option>
         </select>
       </div>
       <button type="submit" id="submit-btn">开始处理</button>
       <p class="hint">列 0 = 原词，列 1 = 极性提示（可选，正面 / 负面），不填表头</p>
+      <a class="download-link" id="template-link" href="/api/v1/normalize/excel/template" download="template.xlsx">下载导入模板</a>
     </form>
   </div>
 

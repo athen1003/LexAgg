@@ -40,7 +40,11 @@ def app_with_counting_stub(monkeypatch, tmp_path):
     """TestClient wired up with a counting stub that supports both 'bge' and 'fasttext'."""
     csv = tmp_path / "vocab.csv"
     csv.write_text(
-        "词,极性\n舒适,正面\n轻薄,正面\n不舒适,负面\n瑕疵,负面\n",
+        "大类,词,极性\n"
+        "体感,舒适,正面\n"
+        "清洁打理,轻薄,正面\n"
+        "体感,不舒适,负面\n"
+        "质量,瑕疵,负面\n",
         encoding="utf-8",
     )
 
@@ -50,7 +54,7 @@ def app_with_counting_stub(monkeypatch, tmp_path):
     _stub_models: dict[str, _CountingEmbedding] = {}
 
     def _stub_get_model(name: str) -> _CountingEmbedding:
-        if name not in {"fasttext", "bge"}:
+        if name not in {"fasttext", "bge", "bge_base", "m3e"}:
             raise ModelNotFoundError(f"未知模型: {name}")
         if name not in _stub_models:
             _stub_models[name] = _CountingEmbedding(name=name)
@@ -137,8 +141,8 @@ def test_normalizer_lazy_build_for_non_default_model(app_with_counting_stub, tmp
 
 
 def test_default_normalizer_built_at_startup(app_with_counting_stub):
-    """The bge (default) normalizer should be present after startup, no
+    """The m3e (default) normalizer should be present after startup, no
     request needed."""
     _, main_module, _ = app_with_counting_stub
-    assert "bge" in main_module._state["normalizers"]
+    assert "m3e" in main_module._state["normalizers"]
     assert "default_normalizer" not in main_module._state

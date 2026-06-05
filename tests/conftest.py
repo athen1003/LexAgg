@@ -8,16 +8,16 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def sample_vocab_csv():
-    content = """词,极性
-舒适,正面
-触感好,正面
-柔软,正面
-凉感适宜,正面
-凉感太弱或太凉,负面
-不舒适,负面
-触感差,负面
-轻薄（含轻盈、不压身）,正面
-瑕疵（含破洞、勾丝、脏）,负面
+    content = """大类,词,极性
+体感,舒适,正面
+体感,触感好,正面
+体感,柔软,正面
+体感,凉感适宜,正面
+体感,凉感太弱或太凉,负面
+体感,不舒适,负面
+体感,触感差,负面
+清洁打理,轻薄（含轻盈、不压身）,正面
+质量,瑕疵（含破洞、勾丝、脏）,负面
 """
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".csv", delete=False, encoding="utf-8"
@@ -30,7 +30,7 @@ def sample_vocab_csv():
 
 @pytest.fixture
 def empty_vocab_csv():
-    content = "词,极性\n"
+    content = "大类,词,极性\n"
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".csv", delete=False, encoding="utf-8"
     ) as f:
@@ -50,14 +50,14 @@ def invalid_column_csv(tmp_path):
 @pytest.fixture
 def invalid_polarity_csv(tmp_path):
     p = tmp_path / "bad_polarity.csv"
-    p.write_text("词,极性\n舒适,正向\n", encoding="utf-8")
+    p.write_text("大类,词,极性\n体感,舒适,正向\n", encoding="utf-8")
     return str(p)
 
 
 @pytest.fixture
 def duplicate_word_csv(tmp_path):
     p = tmp_path / "dup.csv"
-    p.write_text("词,极性\n舒适,正面\n舒适,负面\n", encoding="utf-8")
+    p.write_text("大类,词,极性\n体感,舒适,正面\n体感,舒适,负面\n", encoding="utf-8")
     return str(p)
 
 
@@ -125,10 +125,10 @@ def app_with_stub(monkeypatch, tmp_path):
     # 准备小词库（含括号变体和别名，验证 L1 路径）
     csv = tmp_path / "vocab.csv"
     csv.write_text(
-        "词,极性\n"
-        "舒适,正面\n"
-        "轻薄（含轻盈、不压身）,正面\n"
-        "不舒适,负面\n",
+        "大类,词,极性\n"
+        "体感,舒适,正面\n"
+        "清洁打理,轻薄（含轻盈、不压身）,正面\n"
+        "体感,不舒适,负面\n",
         encoding="utf-8",
     )
 
@@ -139,7 +139,7 @@ def app_with_stub(monkeypatch, tmp_path):
     _stub_models: dict[str, "_StubAppEmbedding"] = {}
 
     def _stub_get_model(name: str) -> _StubAppEmbedding:
-        if name not in {"fasttext", "bge"}:
+        if name not in {"fasttext", "bge", "bge_base", "m3e"}:
             raise ModelNotFoundError(f"未知模型: {name}")
         if name not in _stub_models:
             _stub_models[name] = _StubAppEmbedding(name=name)

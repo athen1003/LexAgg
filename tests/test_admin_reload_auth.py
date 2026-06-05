@@ -26,7 +26,7 @@ def fresh_main(monkeypatch, tmp_path):
     has the right stubs registered before _load_state runs.
     """
     csv = tmp_path / "vocab.csv"
-    csv.write_text("词,极性\n舒适,正面\n不舒适,负面\n", encoding="utf-8")
+    csv.write_text("大类,词,极性\n体感,舒适,正面\n体感,不舒适,负面\n", encoding="utf-8")
 
     # Stub the factory BEFORE reloading main, so _load_state's get_model("bge")
     # finds the stub.

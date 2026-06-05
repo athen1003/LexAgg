@@ -22,10 +22,13 @@ def _register_defaults() -> None:
         return
     # 延迟导入，避免启动时硬依赖
     from app.embedding.fasttext_impl import FastTextEmbedding
-    from app.embedding.bge_impl import BgeEmbedding
+    from app.embedding.bge_impl import BgeBaseEmbedding, BgeEmbedding
+    from app.embedding.m3e_impl import M3eEmbedding
 
     _REGISTRY["fasttext"] = FastTextEmbedding
     _REGISTRY["bge"] = BgeEmbedding
+    _REGISTRY["bge_base"] = BgeBaseEmbedding
+    _REGISTRY["m3e"] = M3eEmbedding
     _registered = True
 
 

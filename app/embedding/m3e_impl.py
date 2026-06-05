@@ -1,8 +1,7 @@
-"""BGE-small-zh embedding via sentence-transformers.
+"""M3E-base embedding via sentence-transformers.
 
-Auto-adapts device: uses CUDA if available, falls back to CPU.
-Model: BAAI/bge-small-zh-v1.5 (~95MB, dim=512)
-Auto-downloads on first use to local models/bge/ cache.
+Model: moka-ai/m3e-base (~400MB, dim=768)
+中文社区常胜军,在中文 STS 任务上常优于 BGE。
 """
 from pathlib import Path
 
@@ -11,15 +10,12 @@ import numpy as np
 from app.embedding.base import EmbeddingModel
 
 
-class BgeEmbedding(EmbeddingModel):
-    """BGE-zh 系列基类。子类通过覆盖 _MODEL_NAME / _CACHE_DIR / _NAME / _DIM
-    即可换型号(load/encode 流程不变)。"""
-    _MODEL_NAME = "BAAI/bge-small-zh-v1.5"
+class M3eEmbedding(EmbeddingModel):
+    _MODEL_NAME = "moka-ai/m3e-base"
     _CACHE_DIR = str(
-        Path(__file__).resolve().parent.parent.parent / "models" / "bge"
+        Path(__file__).resolve().parent.parent.parent / "models" / "m3e_base"
     )
-    _NAME = "bge"
-    _DIM = 512
+    _DIM = 768
 
     def __init__(self, model_name: str | None = None):
         self.model_name = model_name or self._MODEL_NAME
@@ -46,8 +42,7 @@ class BgeEmbedding(EmbeddingModel):
 
     def encode(self, words: list[str]) -> np.ndarray:
         if self._model is None:
-            raise RuntimeError("BgeEmbedding.encode called before load()")
-        # normalize_embeddings=True 让 cosine 退化为点积
+            raise RuntimeError("M3eEmbedding.encode called before load()")
         vecs = self._model.encode(
             words,
             normalize_embeddings=True,
@@ -58,18 +53,8 @@ class BgeEmbedding(EmbeddingModel):
 
     @property
     def name(self) -> str:
-        return self._NAME
+        return "m3e"
 
     @property
     def dim(self) -> int:
         return self._DIM
-
-
-class BgeBaseEmbedding(BgeEmbedding):
-    """BGE-base-zh-v1.5: 同家族 base 档,768 维,~400MB。"""
-    _MODEL_NAME = "BAAI/bge-base-zh-v1.5"
-    _CACHE_DIR = str(
-        Path(__file__).resolve().parent.parent.parent / "models" / "bge_base"
-    )
-    _NAME = "bge_base"
-    _DIM = 768

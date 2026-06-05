@@ -33,7 +33,10 @@ def app_with_static(monkeypatch, tmp_path):
     """TestClient with stub embeddings AND a static/ dir for frontend tests."""
     csv = tmp_path / "vocab.csv"
     csv.write_text(
-        "词,极性\n舒适,正面\n轻盈,正面\n不舒适,负面\n",
+        "大类,词,极性\n"
+        "体感,舒适,正面\n"
+        "清洁打理,轻盈,正面\n"
+        "体感,不舒适,负面\n",
         encoding="utf-8",
     )
 
@@ -43,7 +46,7 @@ def app_with_static(monkeypatch, tmp_path):
     (static_dir / "index.html").write_text(
         "<!DOCTYPE html><html><head><title>词归一化</title></head>"
         "<body><input type=\"file\" accept=\".xlsx\"/>"
-        "<select><option value=\"bge\">bge</option><option value=\"fasttext\">fasttext</option></select>"
+        "<select><option value=\"m3e\" selected>m3e</option><option value=\"bge\">bge</option><option value=\"bge_base\">bge_base</option><option value=\"fasttext\">fasttext</option></select>"
         "<button>开始处理</button></body></html>",
         encoding="utf-8",
     )
@@ -54,7 +57,7 @@ def app_with_static(monkeypatch, tmp_path):
     _stub_models: dict[str, _StubEmbedding] = {}
 
     def _stub_get_model(name: str) -> _StubEmbedding:
-        if name not in {"fasttext", "bge"}:
+        if name not in {"fasttext", "bge", "bge_base", "m3e"}:
             raise ModelNotFoundError(f"未知模型: {name}")
         if name not in _stub_models:
             _stub_models[name] = _StubEmbedding(name=name)

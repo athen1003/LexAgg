@@ -63,11 +63,11 @@ def _load_state(vocab_path: str) -> None:
 
     _state["vocab"] = vocab
     _state["vocab_path"] = vocab_path
-    # 按模型名缓存 Normalizer：默认 bge 启动时建，其他模型首次请求时懒建
+    # 按模型名缓存 Normalizer:默认 m3e 启动时建,其他模型首次请求时懒建
     _state["normalizers"] = {}
     try:
-        default_emb = get_model("bge")
-        _state["normalizers"]["bge"] = Normalizer(default_emb, vocab)
+        default_emb = get_model("m3e")
+        _state["normalizers"]["m3e"] = Normalizer(default_emb, vocab)
     except Exception:
         # 启动时模型加载失败时，不阻塞；后续请求再尝试
         pass
@@ -89,7 +89,7 @@ async def health():
     vocab = _state.get("vocab")
     return {
         "status": "ok",
-        "default_model": "bge",
+        "default_model": "m3e",
         "vocab_size": (
             len(vocab.buckets["正面"]) + len(vocab.buckets["负面"])
             if vocab
@@ -101,7 +101,7 @@ async def health():
 @app.post("/api/v1/normalize")
 async def normalize(
     file: UploadFile = File(...),
-    model: str = Query("bge"),
+    model: str = Query("m3e"),
     debug: int = Query(0),
 ):
     # 流式读取，避免大文件一次性缓冲到内存；累积超过 MAX_FILE_SIZE 立即 413
@@ -133,7 +133,7 @@ async def normalize(
     except ModelNotFoundError:
         return JSONResponse(
             status_code=400,
-            content={"error": "unknown_model", "supported": ["bge", "fasttext"]},
+            content={"error": "unknown_model", "supported": ["bge", "bge_base", "m3e", "fasttext"]},
         )
 
     t0 = time.time()
@@ -178,7 +178,7 @@ def _cell_to_str(v) -> str:
 @app.post("/api/v1/normalize/excel")
 async def normalize_excel(
     file: UploadFile = File(...),
-    model: str = Query("bge"),
+    model: str = Query("m3e"),
     debug: int = Query(0),  # 接受但暂未使用（与 txt 端点参数对齐）
 ):
     # 1. 流式读取 + 大小限制
@@ -219,30 +219,64 @@ async def normalize_excel(
     except ModelNotFoundError:
         return JSONResponse(
             status_code=400,
-            content={"error": "unknown_model", "supported": ["bge", "fasttext"]},
+            content={"error": "unknown_model", "supported": ["bge", "bge_base", "m3e", "fasttext"]},
         )
 
     # 5. 逐行归一
     t0 = time.time()
     out_rows: list[dict] = []
     layer_counts = {"L1": 0, "L2": 0, "L3": 0, "FALLBACK": 0}
+
+    # 5a. 收集全部有效行,极性提示非 {正面, 负面} → 归一为 "__FALLBACK__" 哨兵
+    #     (normalizer 看到后会强制 FALLBACK 但仍算建议)
+    batch_idx: list[int] = []
+    batch_words: list[str] = []
+    batch_hints: list[str] = []
     for _, row in df.iterrows():
         word = _cell_to_str(row.iloc[0]).strip() if len(row) >= 1 else ""
-        # 极性提示：仅作信息回显，不影响匹配
         polarity_hint = _cell_to_str(row.iloc[1]) if len(row) >= 2 else ""
         if not word:
             continue
-        result = normalizer.normalize(word)
-        layer_counts[result.matched_layer] += 1
+        effective_hint = polarity_hint if polarity_hint in {"正面", "负面"} else "__FALLBACK__"
+        batch_idx.append(len(out_rows))
+        batch_words.append(word)
+        batch_hints.append(effective_hint)
         out_rows.append(
             {
                 "原词": word,
-                "归一词": result.normalized,
-                "命中层级": result.matched_layer,
-                "分数": round(result.score, 4),
+                "归一词": word,  # 占位,后面覆盖
+                "命中层级": "FALLBACK",  # 占位
+                "分数": 0.0,
                 "输入极性": polarity_hint,
+                "归一-大类": "",
+                "建议归一词": "",
+                "建议分数": 0.0,
+                "建议-大类": "",
             }
         )
+
+    # 5b. 批量归一 + 累计 FALLBACK
+    fb_acc = _state.setdefault("fallback_acc", {})
+    if batch_words:
+        results = normalizer.normalize_batch(batch_words, batch_hints)
+        for j, row_pos in enumerate(batch_idx):
+            r = results[j]
+            out_rows[row_pos]["归一词"] = r.normalized
+            out_rows[row_pos]["命中层级"] = r.matched_layer
+            out_rows[row_pos]["分数"] = round(r.score, 4)
+            out_rows[row_pos]["归一-大类"] = r.matched_category
+            if r.matched_layer == "FALLBACK":
+                out_rows[row_pos]["建议归一词"] = r.best_candidate
+                out_rows[row_pos]["建议分数"] = round(r.best_candidate_score, 4)
+                out_rows[row_pos]["建议-大类"] = r.best_candidate_category
+                # 累计到 fallback_acc(运营期聚类用)
+                entry = fb_acc.get(r.original)
+                if entry is None:
+                    fb_acc[r.original] = {"freq": 1, "first_seen": time.time()}
+                else:
+                    entry["freq"] += 1
+            layer_counts[r.matched_layer] += 1
+
     elapsed = time.time() - t0
 
     logger.info(
@@ -251,7 +285,11 @@ async def normalize_excel(
 
     # 6. 写 xlsx
     out_df = pd.DataFrame(
-        out_rows, columns=["原词", "归一词", "命中层级", "分数", "输入极性"]
+        out_rows,
+        columns=[
+            "原词", "归一词", "命中层级", "分数", "输入极性", "归一-大类",
+            "建议归一词", "建议分数", "建议-大类",
+        ],
     )
     buf = io.BytesIO()
     out_df.to_excel(buf, index=False, engine="openpyxl")
@@ -265,6 +303,26 @@ async def normalize_excel(
             "Content-Disposition": "attachment; filename=normalized.xlsx",
             "X-Summary": json.dumps(summary, ensure_ascii=False),
         },
+    )
+
+
+@app.get("/api/v1/normalize/excel/template")
+async def normalize_excel_template():
+    """下载 Excel 导入模板：2 列（原词 / 极性），含表头 + 2 行示例。"""
+    df = pd.DataFrame(
+        [
+            ["原词", "极性"],
+            ["舒适", "正面"],
+            ["破洞", "负面"],
+        ]
+    )
+    buf = io.BytesIO()
+    df.to_excel(buf, index=False, header=False, engine="openpyxl")
+    buf.seek(0)
+    return StreamingResponse(
+        io.BytesIO(buf.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=template.xlsx"},
     )
 
 
@@ -319,6 +377,92 @@ async def reload_vocab(request: Request):
         "正面": len(vocab.buckets["正面"]),
         "负面": len(vocab.buckets["负面"]),
     }
+
+
+@app.get("/api/v1/admin/fallbacks")
+async def get_fallbacks(
+    request: Request,
+    model: str = Query("m3e"),
+    min_freq: int = Query(1, ge=1),
+    limit: int = Query(1000, ge=1, le=10000),
+):
+    """累计 FALLBACK 词的运营期分析。返回按「建议归一词」分组、按总频次降序的 JSON。"""
+    denied = _check_admin_auth(
+        request.client.host if request.client else None,
+        request.headers.get("authorization"),
+    )
+    if denied is not None:
+        return denied
+
+    fb_acc = _state.get("fallback_acc", {})
+    total_unique = len(fb_acc)
+    total_freq = sum(info["freq"] for info in fb_acc.values())
+
+    items = [(w, info) for w, info in fb_acc.items() if info["freq"] >= min_freq]
+    items.sort(key=lambda x: -x[1]["freq"])
+    items = items[:limit]
+
+    if not items:
+        return {
+            "total_unique": total_unique,
+            "total_freq": total_freq,
+            "filtered": 0,
+            "by_suggestion": [],
+        }
+
+    try:
+        normalizer = _get_normalizer(model)
+    except ModelNotFoundError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "unknown_model", "supported": ["bge", "bge_base", "m3e", "fasttext"]},
+        )
+
+    words = [w for w, _ in items]
+    vecs = normalizer.embedding.encode(words)
+
+    groups: dict[str, dict] = {}
+    for j, (word, info) in enumerate(items):
+        cand, score, cat = normalizer._suggest_candidate(vecs[j])
+        key = cand if cand else "__no_suggestion__"
+        g = groups.get(key)
+        if g is None:
+            g = {
+                "suggested_vocab": cand,
+                "suggestion_category": cat,
+                "suggestion_score": round(score, 4),
+                "fallbacks": [],
+                "total_freq": 0,
+            }
+            groups[key] = g
+        g["fallbacks"].append({
+            "word": word,
+            "freq": info["freq"],
+            "score": round(score, 4),
+        })
+        g["total_freq"] += info["freq"]
+
+    by_suggestion = sorted(groups.values(), key=lambda g: -g["total_freq"])
+
+    return {
+        "total_unique": total_unique,
+        "total_freq": total_freq,
+        "filtered": len(items),
+        "by_suggestion": by_suggestion,
+    }
+
+
+@app.post("/api/v1/admin/fallbacks/reset")
+async def reset_fallbacks(request: Request):
+    """清空累计的 FALLBACK 词(测试 + 运营期重置)。"""
+    denied = _check_admin_auth(
+        request.client.host if request.client else None,
+        request.headers.get("authorization"),
+    )
+    if denied is not None:
+        return denied
+    _state["fallback_acc"] = {}
+    return {"status": "ok", "cleared": True}
 
 
 # 静态前端（必须放在所有 API 路由之后，避免 shadow）
