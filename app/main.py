@@ -16,9 +16,57 @@ from app.embedding import ModelNotFoundError, get_model
 from app.normalizer import Normalizer
 from app.vocabulary import Vocabulary, VocabularyLoadError
 
+from typing import Union
+
+from pydantic import BaseModel
+
+
+class VocabItem(BaseModel):
+    word: str
+    polarity: str  # "正面" | "负面"
+    category: str = ""
+
+
+class WordItem(BaseModel):
+    word: str
+    polarity: str = ""  # "" = 自动推断, "正面"/"负面" = 锁定单桶, 其他值 = 强制 FALLBACK
+
+
+class NormalizeJsonRequest(BaseModel):
+    words: list[Union[str, WordItem]]  # 每个元素可以是纯字符串或 {word, polarity}
+    vocab: list[VocabItem]
+    model: str = "m3e"
+
+    def get_words_and_hints(self) -> tuple[list[str], list[str], list[str]]:
+        """返回 (word_list, hint_list, raw_polarity_list)。
+        实现与 Excel 端点一致的极性处理：
+        - "正面"/"负面" → 只在对应单桶搜
+        - "" → 自动推断极性 + 双桶对比
+        - 其他值 → 强制 FALLBACK,但不损失建议计算
+        """
+        w, h, raw = [], [], []
+        for item in self.words:
+            if isinstance(item, str):
+                w.append(item)
+                h.append("")
+                raw.append("")
+            else:
+                w.append(item.word)
+                hint = item.polarity
+                raw.append(hint)
+                if hint in ("正面", "负面"):
+                    h.append(hint)
+                elif hint == "":
+                    h.append("")  # auto-infer
+                else:
+                    h.append("__FALLBACK__")  # 非法极性 → force FALLBACK
+        return w, h, raw
+
+
 DEFAULT_VOCAB_PATH = os.environ.get("VOCAB_PATH", "data/vocabulary.csv")
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 MAX_EXCEL_ROWS = 50_000
+MAX_JSON_ITEMS = 50_000
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN")  # None → 仅允许 loopback
 
 logger = logging.getLogger("wordtest")
@@ -137,7 +185,8 @@ async def normalize(
         )
 
     t0 = time.time()
-    results = [normalizer.normalize(line) for line in lines]
+    # 用 batch 一次 encode,避免逐条 GPU launch overhead(单条调 GPU 慢 10-100×)
+    results = normalizer.normalize_batch(lines, [""] * len(lines))
     elapsed = time.time() - t0
 
     layer_counts = {"L1": 0, "L2": 0, "L3": 0, "FALLBACK": 0}
@@ -324,6 +373,90 @@ async def normalize_excel_template():
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=template.xlsx"},
     )
+
+
+@app.post("/api/v1/normalize/json")
+async def normalize_json(body: NormalizeJsonRequest):
+    """JSON 归一：传入待分析词数组 + 标准词库数组，返回归一结果。
+
+    words 每个元素可以是纯字符串，也可以是 {word, polarity}：
+
+    {
+      "words": [
+        {"word": "好用的", "polarity": "正面"},
+        "很差",
+        {"word": "不明", "polarity": "?"}
+      ],
+      "vocab": [
+        {"word": "质量好", "polarity": "正面", "category": "质量"},
+        {"word": "质量差", "polarity": "负面", "category": "质量"}
+      ],
+      "model": "m3e"
+    }
+    """
+    if not body.words:
+        return JSONResponse(status_code=400, content={"error": "empty_words"})
+    if not body.vocab:
+        return JSONResponse(status_code=400, content={"error": "empty_vocab"})
+    if len(body.words) > MAX_JSON_ITEMS:
+        return JSONResponse(status_code=400, content={"error": "too_many_words", "limit": MAX_JSON_ITEMS})
+    if len(body.vocab) > MAX_JSON_ITEMS:
+        return JSONResponse(status_code=400, content={"error": "too_many_vocab", "limit": MAX_JSON_ITEMS})
+
+    word_list, hints, raw_polarities = body.get_words_and_hints()
+
+    # 用传入的 voca 构建临时词库
+    try:
+        vocab = Vocabulary.from_json([item.model_dump() for item in body.vocab])
+    except VocabularyLoadError as e:
+        return JSONResponse(status_code=400, content={"error": "invalid_vocab", "msg": str(e)})
+
+    # 复用已加载的 embedding 模型(权重复用),只为本次请求构造 Normalizer
+    try:
+        embedding = get_model(body.model)
+    except ModelNotFoundError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "unknown_model", "supported": ["bge", "bge_base", "m3e", "fasttext"]},
+        )
+
+    normalizer = Normalizer(embedding, vocab)
+
+    t0 = time.time()
+    results = normalizer.normalize_batch(word_list, hints)
+    elapsed_ms = (time.time() - t0) * 1000
+
+    layer_counts = {"L1": 0, "L2": 0, "L3": 0, "FALLBACK": 0}
+    out = []
+    for i, r in enumerate(results):
+        layer_counts[r.matched_layer] += 1
+        out.append({
+            "original": r.original,
+            "normalized": r.normalized,
+            "layer": r.matched_layer,
+            "score": round(r.score, 4),
+            "category": r.matched_category,
+            "input_polarity": raw_polarities[i],
+            # FALLBACK 时带建议
+            **(
+                {"suggestion": r.best_candidate,
+                 "suggestion_score": round(r.best_candidate_score, 4),
+                 "suggestion_category": r.best_candidate_category}
+                if r.matched_layer == "FALLBACK" else {}
+            ),
+        })
+
+    logger.info(
+        f"POST /normalize/json {len(body.words)} words vocab={len(body.vocab)} "
+        f"model={body.model} elapsed={elapsed_ms:.0f}ms matched={layer_counts}"
+    )
+
+    return {
+        "results": out,
+        "summary": {"total": len(results), **layer_counts},
+        "model": body.model,
+        "elapsed_ms": round(elapsed_ms, 1),
+    }
 
 
 def _is_loopback(client_host: str | None) -> bool:

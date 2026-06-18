@@ -106,6 +106,42 @@ class Vocabulary:
         return [w for w, c in self.category_map.items() if c == category]
 
     @classmethod
+    def from_json(cls, items: list[dict]) -> "Vocabulary":
+        """从 JSON 反序列化。items 为 [{word, polarity, category?}]。"""
+        buckets: dict[str, list[str]] = {"正面": [], "负面": []}
+        polarity_map: dict[str, str] = {}
+        category_map: dict[str, str] = {}
+
+        for i, item in enumerate(items):
+            word = str(item.get("word", "")).strip()
+            polarity = str(item.get("polarity", "")).strip()
+            category = str(item.get("category", "")).strip()
+
+            if not word:
+                raise VocabularyLoadError(f"vocab[{i}]: word 为空")
+            if polarity not in {"正面", "负面"}:
+                raise VocabularyLoadError(
+                    f"vocab[{i}]: polarity '{polarity}' 不合法,应填 '正面' 或 '负面'"
+                )
+            if word in polarity_map:
+                raise VocabularyLoadError(
+                    f"vocab[{i}]: 词 '{word}' 重复(已标记为 {polarity_map[word]})"
+                )
+
+            buckets[polarity].append(word)
+            polarity_map[word] = polarity
+            category_map[word] = category
+
+        if not buckets["正面"] and not buckets["负面"]:
+            raise VocabularyLoadError("vocab 为空: 至少需要 1 个正面或负面词")
+
+        return cls(
+            buckets=buckets,
+            polarity_map=polarity_map,
+            category_map=category_map,
+        )
+
+    @classmethod
     def load_from_rows(
         cls,
         rows: list[tuple[str, str]],

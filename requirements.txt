@@ -1,3 +1,7 @@
+# torch 不在此处固定版本号。PyTorch wheel 与平台/驱动强绑定,
+# 需按环境(GPU/CPU、Windows/Linux、CUDA 版本)单独安装,见 README § 安装。
+# 直接 `pip install -r requirements.txt` 拉的是 CPU 版,NVIDIA 卡装了也跑不了 GPU。
+
 fastapi==0.115.*
 uvicorn[standard]==0.32.*
 python-multipart==0.0.*
